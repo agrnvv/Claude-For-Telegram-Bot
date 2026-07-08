@@ -6,7 +6,7 @@ client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 async def get_reply(message: str) -> str:
     response = await client.messages.create(
         model = settings.claude_model,
-        max_tokens = 2048,
+        max_tokens = 512,
         messages=[
             {"role":"user", "content": message}
         ]
