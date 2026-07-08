@@ -4,3 +4,16 @@
 # restart/redeploy by design: this is the "don't store everything" half of the
 # memory model. Optionally evict chats idle longer than SESSION_IDLE_TIMEOUT
 # to bound memory usage on long-running Railway deployments.
+from collections import deque
+from claudefortelegram.config import settings
+# chat_id -> deque of {"role": ..., "content": ...} dicts, capped at
+# settings.max_session_messages. Lives only in process memory.
+_sessions: dict[int, deque] = {}
+
+def get_history(chat_id: int) -> list[dict]:
+    return list(_sessions.get(chat_id, []))
+
+def append(chat_id: int, role: str, content: str) -> None:
+    if chat_id not in _sessions:
+        _sessions[chat_id] = deque(maxlen=settings.max_session_messages)
+    _sessions[chat_id].append({"role": role, "content": content})

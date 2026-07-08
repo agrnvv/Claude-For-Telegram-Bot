@@ -3,4 +3,6 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+plan.md
+howtorun.txt
 .env
