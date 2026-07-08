@@ -1,5 +1,14 @@
-# Thin wrapper around the Anthropic SDK. Builds the request (model, system prompt
-# with injected long-term memories, short-term session history, the "remember" tool
-# from claude/tools.py) and drives the tool-use loop: streams text deltas back to
-# the caller for incremental Telegram edits, and on a save_memory tool_use block,
-# dispatches to claude/tools.py before continuing the stream.
+from anthropic import AsyncAnthropic
+from claudefortelegram.config import settings
+client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+
+#defining the response function
+async def get_reply(message: str) -> str:
+    response = await client.messages.create(
+        model = settings.claude_model,
+        max_tokens = 2048,
+        messages=[
+            {"role":"user", "content": message}
+        ]
+    )
+    return response.content[0].text
