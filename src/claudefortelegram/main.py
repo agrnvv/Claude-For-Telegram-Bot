@@ -3,8 +3,11 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from claudefortelegram.config import settings
 from claudefortelegram.claude.client import get_reply
+from claudefortelegram.bot.middleware import is_allowed
 #defining the echo function
 async def handlemessage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_allowed(update):
+        return  # silently ignore anyone not in ALLOWED_USER_IDS
     reply = await get_reply(update.message.text)
     await update.message.reply_text(reply)
 

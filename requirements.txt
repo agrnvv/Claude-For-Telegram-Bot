@@ -2,7 +2,3 @@ anthropic>=0.90
 python-telegram-bot[job-queue]>=21.0
 python-dotenv>=1.0
 asyncpg>=0.29
-"""pip install python-dotenv
-pip install python-telegram-bot
-pip install anthropic
-"""
