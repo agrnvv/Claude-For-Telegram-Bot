@@ -12,7 +12,7 @@ async def handlemessage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     chat_id = update.effective_chat.id
     session.append(chat_id, "user", update.message.text)
 
-    reply = await get_reply(session.get_history(chat_id))
+    reply = await get_reply(chat_id, session.get_history(chat_id))
 
     session.append(chat_id, "assistant", reply)
     await update.message.reply_text(reply)
