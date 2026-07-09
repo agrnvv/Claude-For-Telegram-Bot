@@ -34,4 +34,11 @@ async def handle_save_memory(chat_id: int, tool_input: dict) -> str:
 
 # Anthropic-hosted server tool — Claude runs the search itself, no dispatch
 # function needed on our side. Just declaring it is enough to enable it.
-WEB_SEARCH_TOOL = {"type": "web_search_20260209", "name": "web_search"}
+# allowed_callers: ["direct"] disables this tool's dynamic-filtering mode
+# (which needs programmatic tool calling, unsupported on Haiku) so it works
+# the same simple way across every model this bot can be switched to.
+WEB_SEARCH_TOOL = {
+    "type": "web_search_20260209",
+    "name": "web_search",
+    "allowed_callers": ["direct"],
+}
