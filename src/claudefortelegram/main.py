@@ -1,4 +1,5 @@
 #importing the necessary modules
+import logging
 import time
 
 from telegram import Update
@@ -13,6 +14,9 @@ from claudefortelegram.utils.telegram_formatting import (
     markdown_to_telegram_html,
     split_message,
 )
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 EDIT_INTERVAL_SECONDS = 1.0
 
@@ -105,6 +109,17 @@ async def handlemessage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def post_init(application: Application) -> None:
     await postgres_store.init_pool()
 
+#catches any exception raised in any handler above (Anthropic API errors,
+#Telegram network errors, Postgres errors, ...) so one bad request just gets
+#logged and reported to the user instead of leaving them stuck with no reply
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.error("Exception while handling an update:", exc_info=context.error)
+
+    if isinstance(update, Update) and update.effective_message:
+        await update.effective_message.reply_text(
+            "Something went wrong on my end — try again in a moment."
+        )
+
 #defining the main function
 def main() -> None:
     application = (
@@ -120,6 +135,8 @@ def main() -> None:
     application.add_handler(CommandHandler("forget", forget_command))
     #adding the handler for the message
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlemessage))
+    #catches exceptions from any of the handlers above
+    application.add_error_handler(error_handler)
     #running the polling
     application.run_polling()
 

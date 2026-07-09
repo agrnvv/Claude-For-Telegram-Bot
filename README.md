@@ -1,9 +1,14 @@
 # claudefortelegram
 
-A personal Telegram bot that relays your messages to Claude via the Anthropic API and
-replies in the chat. Python, long polling, deployed on Railway. Claude Sonnet 5 by
+A Telegram bot that relays messages to Claude via the Anthropic API and replies in the
+chat. Python, long polling, deployable on Railway in a few minutes. Claude Sonnet 5 by
 default. Only facts you explicitly ask it to remember are persisted — everything else
 lives in memory for the life of the process.
+
+This is an open-source personal-assistant bot: anyone can clone this repo and deploy
+their **own** copy with their **own** bot token and API key (see [License](#license)).
+Deploying this repo doesn't give anyone access to *your* bot — each deployment is its
+own isolated instance.
 
 ## Using the bot in Telegram
 
@@ -28,6 +33,60 @@ every future conversation, even after a restart.
 
 Only messages from Telegram user IDs listed in `ALLOWED_USER_IDS` get a response —
 everyone else is silently ignored.
+
+## Getting your own bot running
+
+### 1. What you'll need
+
+- **A Telegram bot token** — message [@BotFather](https://t.me/BotFather) on Telegram,
+  send `/newbot`, follow the prompts. You'll get a token like `123456:ABC-...`.
+- **An Anthropic API key** — create one at the
+  [Anthropic Console](https://console.anthropic.com).
+- **Your Telegram user ID** — message [@userinfobot](https://t.me/userinfobot), it
+  replies with your numeric ID. This goes in `ALLOWED_USER_IDS` so only you (and anyone
+  else you add) can use the bot.
+
+### 2. Deploy to Railway (recommended)
+
+1. Fork this repository to your own GitHub account.
+2. Go to [railway.app](https://railway.app) and sign in with GitHub.
+3. **New Project → Deploy from GitHub repo** → select your fork.
+   The first deploy will fail — that's expected, there's no database or config yet.
+4. In the project canvas, click **+ New → Database → Add PostgreSQL** to add a Postgres
+   service alongside your bot.
+5. Click your **bot's** service card → **Variables** tab, and add:
+   - `TELEGRAM_BOT_TOKEN`
+   - `ANTHROPIC_API_KEY`
+   - `ALLOWED_USER_IDS`
+   - `DATABASE_URL` — Railway usually offers to link this from the Postgres service
+     automatically; if not, set it to `${{Postgres.DATABASE_URL}}` (use your Postgres
+     service's actual name if it's not called `Postgres`).
+6. Redeploy the bot service. Check the **Deployments/Logs** tab — no errors means it's
+   running and long-polling Telegram.
+7. Message your bot on Telegram. It should reply.
+
+`railway.json` in this repo already defines the build and start command — you don't
+need to configure anything else on Railway itself.
+
+### 3. Or run it locally
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env   # fill in TELEGRAM_BOT_TOKEN, ANTHROPIC_API_KEY, ALLOWED_USER_IDS, DATABASE_URL
+./scripts/run.sh
+```
+
+Locally you need your own Postgres instance running (e.g. `docker run -p 5432:5432 -e
+POSTGRES_PASSWORD=postgres postgres`) and its connection string in `DATABASE_URL`.
+
+## Configuration
+
+Environment-driven via `.env` locally / Railway variables in production (see
+`.env.example`): bot token, API key, allowed user IDs, model, effort, `DATABASE_URL`,
+in-memory session cap (`MAX_SESSION_MESSAGES`), idle eviction timeout
+(`SESSION_IDLE_TIMEOUT_MINUTES`), optional custom system prompt file.
 
 ## Project layout
 
@@ -110,33 +169,7 @@ Default is **Claude Sonnet 5** (`claude-sonnet-5`), adaptive thinking, `effort: 
 best cost/quality balance for daily personal use. `/model` can switch a chat to
 `claude-opus-4-8` (hardest reasoning) or `claude-haiku-4-5` (fastest/cheapest).
 
-### Deployment on Railway
+## License
 
-- The bot runs as a **long-running worker** using long polling — no public domain,
-  webhook route, or TLS cert needed, which is the simplest thing to run on Railway.
-- `railway.json` defines the Nixpacks build and the start command
-  (`python -m claudefortelegram.main`), with auto-restart on failure.
-- Add Railway's **Postgres plugin** to the project; it injects `DATABASE_URL` into the
-  environment automatically — `memory/postgres_store.py` reads it directly, and applies
-  `db/schema.sql` on startup if the `memories` table doesn't exist yet.
-- Set `TELEGRAM_BOT_TOKEN`, `ANTHROPIC_API_KEY`, and `ALLOWED_USER_IDS` as Railway
-  environment variables (same names as `.env.example`) — no `.env` file is deployed.
-
-### Configuration
-
-Environment-driven via `.env` locally / Railway variables in production (see
-`.env.example`): bot token, API key, allowed user IDs, model, effort, `DATABASE_URL`,
-in-memory session cap (`MAX_SESSION_MESSAGES`), idle eviction timeout
-(`SESSION_IDLE_TIMEOUT_MINUTES`), optional custom system prompt file.
-
-## Setup (once code is implemented)
-
-```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env   # fill in TELEGRAM_BOT_TOKEN, ANTHROPIC_API_KEY, ALLOWED_USER_IDS, DATABASE_URL
-./scripts/run.sh
-```
-
-On Railway: create a project, add the Postgres plugin, set the three secrets above as
-variables, and deploy — `railway.json` handles the rest.
+[MIT](./LICENSE) — do whatever you want with this code, including running your own
+copy of the bot. No warranty.
