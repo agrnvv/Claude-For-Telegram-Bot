@@ -2,7 +2,7 @@ from anthropic import AsyncAnthropic
 
 from claudefortelegram.config import settings
 from claudefortelegram.claude.prompts import build_system_prompt
-from claudefortelegram.claude.tools import SAVE_MEMORY_TOOL, WEB_SEARCH_TOOL, handle_save_memory
+from claudefortelegram.claude.tools import SAVE_MEMORY_TOOL, handle_save_memory, web_search_tool_for_model
 from claudefortelegram.memory import postgres_store
 from claudefortelegram.conversation import session
 
@@ -21,7 +21,7 @@ async def get_reply(chat_id: int, messages: list[dict]):
             model=model,
             max_tokens=1024,
             system=system_prompt,
-            tools=[SAVE_MEMORY_TOOL, WEB_SEARCH_TOOL],
+            tools=[SAVE_MEMORY_TOOL, web_search_tool_for_model(model)],
             messages=conversation,
         ) as stream:
             async for event in stream:

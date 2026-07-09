@@ -34,11 +34,20 @@ async def handle_save_memory(chat_id: int, tool_input: dict) -> str:
 
 # Anthropic-hosted server tool — Claude runs the search itself, no dispatch
 # function needed on our side. Just declaring it is enough to enable it.
-# allowed_callers: ["direct"] disables this tool's dynamic-filtering mode
-# (which needs programmatic tool calling, unsupported on Haiku) so it works
-# the same simple way across every model this bot can be switched to.
-WEB_SEARCH_TOOL = {
-    "type": "web_search_20260209",
-    "name": "web_search",
-    "allowed_callers": ["direct"],
+
+# Models that support the dynamic-filtering mode of web_search (it's built on
+# programmatic tool calling). Anything else — e.g. Haiku — needs
+# allowed_callers=["direct"] or the API rejects the request outright.
+MODELS_WITH_DYNAMIC_SEARCH_FILTERING = {
+    "claude-opus-4-8",
+    "claude-sonnet-5",
 }
+
+
+def web_search_tool_for_model(model: str) -> dict:
+    """Build the web_search tool definition, restricted to allowed_callers=["direct"]
+    on models that don't support programmatic tool calling."""
+    tool = {"type": "web_search_20260209", "name": "web_search"}
+    if model not in MODELS_WITH_DYNAMIC_SEARCH_FILTERING:
+        tool["allowed_callers"] = ["direct"]
+    return tool
