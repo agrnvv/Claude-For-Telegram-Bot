@@ -4,6 +4,7 @@ from claudefortelegram.config import settings
 from claudefortelegram.claude.prompts import build_system_prompt
 from claudefortelegram.claude.tools import SAVE_MEMORY_TOOL, handle_save_memory
 from claudefortelegram.memory import postgres_store
+from claudefortelegram.conversation import session
 
 client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
@@ -11,12 +12,13 @@ client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 async def get_reply(chat_id: int, messages: list[dict]):
     memories = await postgres_store.get_memories(chat_id)
     system_prompt = build_system_prompt(memories)
+    model = session.get_model(chat_id)
 
     conversation = list(messages)  # local copy — tool exchanges stay out of session history
 
     while True:
         async with client.messages.stream(
-            model=settings.claude_model,
+            model=model,
             max_tokens=1024,
             system=system_prompt,
             tools=[SAVE_MEMORY_TOOL],

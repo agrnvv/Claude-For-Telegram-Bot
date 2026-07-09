@@ -5,6 +5,30 @@ replies in the chat. Python, long polling, deployed on Railway. Claude Sonnet 5 
 default. Only facts you explicitly ask it to remember are persisted — everything else
 lives in memory for the life of the process.
 
+## Using the bot in Telegram
+
+**Just chat normally.** Send it any message and it replies via Claude. It remembers
+the conversation while the process is running (so follow-up questions work), but that
+short-term context is lost on restart — that's by design, see the memory model below.
+
+**To make it remember something long-term, just ask in plain language** — e.g. "remember
+that I'm allergic to peanuts" or "note that my flight is on the 14th." There's no special
+command for this: Claude itself decides when something you said is worth saving
+permanently, and stores it via a tool call. From then on, that fact is loaded back in on
+every future conversation, even after a restart.
+
+**Commands:**
+
+| Command | What it does |
+| --- | --- |
+| `/model` | Shows which model this chat is currently using. |
+| `/model sonnet` \| `/model opus` \| `/model haiku` | Switches this chat to Claude Sonnet 5 (default, best balance), Opus 4.8 (hardest reasoning), or Haiku 4.5 (fastest/cheapest). This choice is per-chat and resets on restart. |
+| `/memories` | Lists every fact currently saved for this chat, each with a numeric ID. |
+| `/forget <id>` | Deletes one saved fact by its ID (get the ID from `/memories` first). |
+
+Only messages from Telegram user IDs listed in `ALLOWED_USER_IDS` get a response —
+everyone else is silently ignored.
+
 ## Project layout
 
 ```
@@ -15,11 +39,10 @@ claudefortelegram/
 ├── .gitignore
 ├── requirements.txt
 ├── src/claudefortelegram/
-│   ├── main.py                   # entrypoint: wires everything together, starts long polling
+│   ├── main.py                   # entrypoint + all command/message handlers (/model, /memories, /forget, chat)
 │   ├── config.py                 # loads/validates environment variables
 │   ├── bot/
-│   │   ├── handlers.py           # /start, /model, /memories, /forget, and the main on_message flow
-│   │   └── middleware.py         # user allowlist check, typing indicator, edit-rate limiting
+│   │   └── middleware.py         # user allowlist check (is_allowed)
 │   ├── claude/
 │   │   ├── client.py             # Anthropic SDK wrapper — request building, streaming, tool-use loop
 │   │   ├── prompts.py            # system prompt template (injects remembered facts)
@@ -63,9 +86,9 @@ but it never forgets your birthday once you've told it to remember it.
    (a worker process, not a web service).
 2. **Access control.** `bot/middleware.py` checks the sender's Telegram user ID against
    `ALLOWED_USER_IDS`.
-3. **Load context.** `bot/handlers.py` pulls the short-term history for this `chat_id`
-   from `conversation/session.py` (in-memory) and the long-term facts from
-   `memory/store.py` (Postgres).
+3. **Load context.** `main.py` pulls the short-term history for this `chat_id` from
+   `conversation/session.py` (in-memory); `claude/client.py` separately loads the
+   long-term facts from `memory/postgres_store.py` (Postgres).
 4. **Call Claude.** `claude/client.py` calls `client.messages.stream(...)` with:
    - `model = claude-sonnet-5` (from `CLAUDE_MODEL`), adaptive thinking, `effort: high`
    - a system prompt rendered with the loaded long-term facts

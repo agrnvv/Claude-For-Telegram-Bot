@@ -17,3 +17,16 @@ def append(chat_id: int, role: str, content: str) -> None:
     if chat_id not in _sessions:
         _sessions[chat_id] = deque(maxlen=settings.max_session_messages)
     _sessions[chat_id].append({"role": role, "content": content})
+
+
+# Per-chat model override, set via /model. Separate from _sessions since it's
+# a different kind of state (a preference, not conversation history).
+_model_overrides: dict[int, str] = {}
+
+
+def set_model(chat_id: int, model: str) -> None:
+    _model_overrides[chat_id] = model
+
+
+def get_model(chat_id: int) -> str:
+    return _model_overrides.get(chat_id, settings.claude_model)
