@@ -87,8 +87,15 @@ async def handlemessage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     full_reply = ""
     last_edit = time.monotonic()
 
-    async for chunk in get_reply(chat_id, session.get_history(chat_id)):
-        full_reply += chunk
+    async for item in get_reply(chat_id, session.get_history(chat_id)):
+        if item["type"] == "status":
+            # Rare, meaningful state change (e.g. "searching the web") — show it
+            # right away, don't wait for the throttle interval like text deltas.
+            await placeholder.edit_text(item["text"])
+            last_edit = time.monotonic()
+            continue
+
+        full_reply += item["text"]
         now = time.monotonic()
         # Skip the live-edit once we're past Telegram's limit — Telegram would
         # reject the edit outright. The final flush below handles the overflow

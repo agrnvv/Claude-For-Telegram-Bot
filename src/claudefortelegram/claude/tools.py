@@ -30,3 +30,8 @@ async def handle_save_memory(chat_id: int, tool_input: dict) -> str:
     content = tool_input["content"]
     await postgres_store.save_memory(chat_id, content)
     return f"Saved: {content}"
+
+
+# Anthropic-hosted server tool — Claude runs the search itself, no dispatch
+# function needed on our side. Just declaring it is enough to enable it.
+WEB_SEARCH_TOOL = {"type": "web_search_20260209", "name": "web_search"}
