@@ -100,9 +100,19 @@ async def handlemessage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     session.append(chat_id, "assistant", full_reply)
 
+#runs once, after the Application is built but before polling starts —
+#the right place to open the DB pool, since it needs a running event loop
+async def post_init(application: Application) -> None:
+    await postgres_store.init_pool()
+
 #defining the main function
 def main() -> None:
-    application = Application.builder().token(settings.telegram_bot_token).build()
+    application = (
+        Application.builder()
+        .token(settings.telegram_bot_token)
+        .post_init(post_init)
+        .build()
+    )
     #adding the handler for the /model command
     application.add_handler(CommandHandler("model", model_command))
     #adding the handlers for /memories and /forget

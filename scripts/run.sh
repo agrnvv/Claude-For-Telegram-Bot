@@ -3,4 +3,4 @@
 # with long polling. Intended to be run under systemd/pm2/screen for uptime.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-python -m claudefortelegram.main
+PYTHONPATH=src python -m claudefortelegram.main
