@@ -3,6 +3,7 @@ import logging
 import time
 
 from telegram import Update
+from telegram.error import BadRequest
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from claudefortelegram.config import settings
 from claudefortelegram.claude.client import get_reply
@@ -58,7 +59,9 @@ async def memories_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text("No memories saved yet.")
         return
 
-    lines = [f"{m['id']}: {m['content']}" for m in memories]
+    # Positional numbering (1, 2, 3, ...) instead of raw DB ids — otherwise
+    # deleting an early memory leaves a gap and the list starts at, say, 2.
+    lines = [f"{i}: {m['content']}" for i, m in enumerate(memories, start=1)]
     await update.message.reply_text("\n".join(lines))
 
 #defining the /forget command
@@ -68,12 +71,32 @@ async def forget_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     chat_id = update.effective_chat.id
 
     if not context.args or not context.args[0].isdigit():
-        await update.message.reply_text("Usage: /forget <id> (see /memories for IDs)")
+        await update.message.reply_text("Usage: /forget <number> (see /memories for numbers)")
         return
 
-    memory_id = int(context.args[0])
+    # The number is a position in the current /memories listing, not the raw
+    # DB id — resolve it against a fresh list so it always matches what the
+    # user just saw, then delete by the real id underneath.
+    position = int(context.args[0])
+    memories = await postgres_store.list_memories(chat_id)
+    if position < 1 or position > len(memories):
+        await update.message.reply_text("No such memory number. Check /memories.")
+        return
+
+    memory_id = memories[position - 1]["id"]
     await postgres_store.forget_memory(chat_id, memory_id)
-    await update.message.reply_text(f"Forgot memory {memory_id}.")
+    await update.message.reply_text(f"Forgot memory {position}.")
+
+#Telegram rejects an edit whose text is byte-identical to what's already
+#shown (BadRequest: "Message is not modified") instead of just no-op'ing.
+#That's harmless — it means the displayed text is already correct — so
+#swallow only that specific error and let anything else propagate normally.
+async def safe_edit(message, text: str, **kwargs) -> None:
+    try:
+        await message.edit_text(text, **kwargs)
+    except BadRequest as e:
+        if "Message is not modified" not in str(e):
+            raise
 
 #defining the echo function
 async def handlemessage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -91,7 +114,7 @@ async def handlemessage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         if item["type"] == "status":
             # Rare, meaningful state change (e.g. "searching the web") — show it
             # right away, don't wait for the throttle interval like text deltas.
-            await placeholder.edit_text(item["text"])
+            await safe_edit(placeholder, item["text"])
             last_edit = time.monotonic()
             continue
 
@@ -101,11 +124,11 @@ async def handlemessage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         # reject the edit outright. The final flush below handles the overflow
         # properly by splitting into multiple messages.
         if now - last_edit >= EDIT_INTERVAL_SECONDS and len(full_reply) <= TELEGRAM_MAX_LENGTH:
-            await placeholder.edit_text(markdown_to_telegram_html(full_reply), parse_mode="HTML")
+            await safe_edit(placeholder, markdown_to_telegram_html(full_reply), parse_mode="HTML")
             last_edit = now
 
     chunks = split_message(full_reply)
-    await placeholder.edit_text(markdown_to_telegram_html(chunks[0]), parse_mode="HTML")
+    await safe_edit(placeholder, markdown_to_telegram_html(chunks[0]), parse_mode="HTML")
     for extra in chunks[1:]:
         await update.message.reply_text(markdown_to_telegram_html(extra), parse_mode="HTML")
 
