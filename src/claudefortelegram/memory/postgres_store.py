@@ -19,14 +19,23 @@ async def init_pool() -> None:
     async with _pool.acquire() as conn:
         await conn.execute(_SCHEMA_PATH.read_text())
     
+# Cap on facts injected into the system prompt on every single request. Without
+# this, saving more memories over time makes every future message — even "hi" —
+# a little more expensive forever, with no ceiling.
+MAX_MEMORIES_IN_PROMPT = 50
+
+
 async def get_memories(chat_id: int) -> list[str]:
-    """Fact strings only — for injecting into the system prompt."""
+    """Fact strings only — for injecting into the system prompt. Most recent
+    MAX_MEMORIES_IN_PROMPT facts, oldest first so they still read naturally."""
     async with _pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT content FROM memories WHERE chat_id = $1 ORDER BY created_at",
+            "SELECT content FROM memories WHERE chat_id = $1 "
+            "ORDER BY created_at DESC LIMIT $2",
             chat_id,
+            MAX_MEMORIES_IN_PROMPT,
         )
-    return [row["content"] for row in rows]
+    return [row["content"] for row in reversed(rows)]
 async def save_memory(chat_id: int, content: str) -> None:
     async with _pool.acquire() as conn:
         await conn.execute(
