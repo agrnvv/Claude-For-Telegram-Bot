@@ -13,9 +13,14 @@ _sessions: dict[int, deque] = {}
 def get_history(chat_id: int) -> list[dict]:
     return list(_sessions.get(chat_id, []))
 
-def append(chat_id: int, role: str, content: str) -> None:
+def append(chat_id: int, role: str, content: str, max_messages: int | None = None) -> None:
+    # max_messages only takes effect the first time this chat_id is seen —
+    # a deque's maxlen is fixed at creation. Callers for a given chat_id
+    # should pass a consistent value (private chats: default/omitted; group
+    # chats: settings.group_max_session_messages) since a chat's type never
+    # changes mid-conversation.
     if chat_id not in _sessions:
-        _sessions[chat_id] = deque(maxlen=settings.max_session_messages)
+        _sessions[chat_id] = deque(maxlen=max_messages or settings.max_session_messages)
     _sessions[chat_id].append({"role": role, "content": content})
 
 

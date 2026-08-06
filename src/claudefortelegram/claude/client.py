@@ -1,12 +1,34 @@
+import logging
+
 from anthropic import AsyncAnthropic
 
 from claudefortelegram.config import settings
 from claudefortelegram.claude.prompts import build_system_prompt
-from claudefortelegram.claude.tools import SAVE_MEMORY_TOOL, handle_save_memory, web_search_tool_for_model
+from claudefortelegram.claude.tools import (
+    SAVE_MEMORY_TOOL,
+    handle_save_memory,
+    web_search_tool_for_model,
+    google_docs_tools,
+    handle_read_google_doc,
+    handle_append_google_doc,
+)
+from claudefortelegram.google_docs import client as google_docs_client
 from claudefortelegram.memory import postgres_store
 from claudefortelegram.conversation import session
+from claudefortelegram.usage import store as usage_store
+
+logger = logging.getLogger(__name__)
 
 client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+
+# Client-side tool dispatch table: tool name -> async handler(chat_id, tool_input) -> result text.
+# Every handler shares this signature even when it doesn't need chat_id (see
+# claude/tools.py), so adding a tool here never grows this into an if/elif chain.
+TOOL_HANDLERS = {
+    "save_memory": handle_save_memory,
+    "read_google_doc": handle_read_google_doc,
+    "append_to_google_doc": handle_append_google_doc,
+}
 
 # Hard ceiling on tool-loop passes within a single reply. Without this, a
 # server-side tool loop that keeps returning pause_turn (or any other stuck
@@ -17,7 +39,7 @@ MAX_TOOL_ITERATIONS = 5
 
 async def get_reply(chat_id: int, messages: list[dict]):
     memories = await postgres_store.get_memories(chat_id)
-    system_prompt = build_system_prompt(memories)
+    system_prompt = build_system_prompt(memories, google_docs_enabled=google_docs_client.is_configured())
     model = session.get_model(chat_id)
 
     conversation = list(messages)  # local copy — tool exchanges stay out of session history
@@ -38,6 +60,33 @@ async def get_reply(chat_id: int, messages: list[dict]):
             }],
         }
 
+    # Accumulated across every pass of the loop below — a single user-facing
+    # reply can span several API calls (tool_use / pause_turn), and we want
+    # one usage_log row for the whole reply, not one per pass.
+    total_input_tokens = 0
+    total_output_tokens = 0
+    total_cache_read_tokens = 0
+    total_cache_creation_tokens = 0
+    web_search_used = False
+
+    async def _record_usage(iterations: int) -> None:
+        logger.info(
+            "usage chat_id=%s model=%s input=%d output=%d cache_read=%d cache_creation=%d "
+            "iterations=%d web_search=%s",
+            chat_id, model, total_input_tokens, total_output_tokens,
+            total_cache_read_tokens, total_cache_creation_tokens, iterations, web_search_used,
+        )
+        await usage_store.record_usage(
+            chat_id=chat_id,
+            model=model,
+            input_tokens=total_input_tokens,
+            output_tokens=total_output_tokens,
+            cache_read_input_tokens=total_cache_read_tokens,
+            cache_creation_input_tokens=total_cache_creation_tokens,
+            iterations=iterations,
+            web_search_used=web_search_used,
+        )
+
     iterations = 0
     while True:
         iterations += 1
@@ -46,6 +95,7 @@ async def get_reply(chat_id: int, messages: list[dict]):
                 "type": "text",
                 "text": "\n\n⚠️ Couldn't finish within a reasonable number of steps — try a simpler or more specific question.",
             }
+            await _record_usage(iterations - 1)
             return
 
         async with client.messages.stream(
@@ -56,15 +106,21 @@ async def get_reply(chat_id: int, messages: list[dict]):
                 "text": system_prompt,
                 "cache_control": {"type": "ephemeral"},
             }],
-            tools=[SAVE_MEMORY_TOOL, web_search_tool_for_model(model)],
+            tools=[SAVE_MEMORY_TOOL, web_search_tool_for_model(model), *google_docs_tools()],
             messages=conversation,
         ) as stream:
             async for event in stream:
                 if event.type == "content_block_start" and event.content_block.type == "server_tool_use":
+                    web_search_used = True
                     yield {"type": "status", "text": "🔎 Searching the web…"}
                 elif event.type == "content_block_delta" and event.delta.type == "text_delta":
                     yield {"type": "text", "text": event.delta.text}
             response = await stream.get_final_message()
+
+        total_input_tokens += getattr(response.usage, "input_tokens", 0) or 0
+        total_output_tokens += getattr(response.usage, "output_tokens", 0) or 0
+        total_cache_read_tokens += getattr(response.usage, "cache_read_input_tokens", 0) or 0
+        total_cache_creation_tokens += getattr(response.usage, "cache_creation_input_tokens", 0) or 0
 
         if response.stop_reason == "tool_use":
             # Claude wants to call a client-side tool — append its turn, run it, feed the result back
@@ -72,13 +128,17 @@ async def get_reply(chat_id: int, messages: list[dict]):
 
             tool_results = []
             for block in response.content:
-                if block.type == "tool_use" and block.name == "save_memory":
-                    result_text = await handle_save_memory(chat_id, block.input)
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": result_text,
-                    })
+                if block.type != "tool_use":
+                    continue
+                handler = TOOL_HANDLERS.get(block.name)
+                if handler is None:
+                    continue
+                result_text = await handler(chat_id, block.input)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": result_text,
+                })
 
             conversation.append({"role": "user", "content": tool_results})
             continue
@@ -89,4 +149,5 @@ async def get_reply(chat_id: int, messages: list[dict]):
             conversation.append({"role": "assistant", "content": response.content})
             continue
 
+        await _record_usage(iterations)
         return  # end_turn or anything else — actually done

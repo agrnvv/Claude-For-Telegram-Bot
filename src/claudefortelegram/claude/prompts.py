@@ -12,9 +12,18 @@ BASE_PROMPT = (
 )
 
 
-def build_system_prompt(memories: list[str]) -> str:
+GOOGLE_DOCS_ADDENDUM = (
+    "\n\nIf the user shares a Google Docs link and explicitly asks you to read or add "
+    "something to it, use the read_google_doc / append_to_google_doc tools. Only touch "
+    "a doc when explicitly asked — a link appearing in conversation isn't itself a request."
+)
+
+
+def build_system_prompt(memories: list[str], google_docs_enabled: bool = False) -> str:
+    prompt = BASE_PROMPT + (GOOGLE_DOCS_ADDENDUM if google_docs_enabled else "")
+
     if not memories:
-        return BASE_PROMPT
+        return prompt
 
     facts = "\n".join(f"- {fact}" for fact in memories)
-    return f"{BASE_PROMPT}\n\nWhat you know about this user:\n{facts}"
+    return f"{prompt}\n\nWhat you know about this user:\n{facts}"

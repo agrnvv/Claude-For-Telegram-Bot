@@ -3,13 +3,24 @@ import logging
 import time
 
 from telegram import Update
+from telegram.constants import ChatMemberStatus, ChatType
 from telegram.error import BadRequest
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import (
+    Application,
+    ChatMemberHandler,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+)
 from claudefortelegram.config import settings
 from claudefortelegram.claude.client import get_reply
 from claudefortelegram.bot.middleware import is_allowed
+from claudefortelegram.bot.reply_context import build_reply_prefix
+from claudefortelegram.bot import allowed_chats_store, group_support
 from claudefortelegram.conversation import session
 from claudefortelegram.memory import postgres_store
+from claudefortelegram.usage import store as usage_store
 from claudefortelegram.utils.telegram_formatting import (
     TELEGRAM_MAX_LENGTH,
     markdown_to_telegram_html,
@@ -47,6 +58,27 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     session.set_model(chat_id, MODEL_ALIASES[choice])
     await update.message.reply_text(f"Model set to {MODEL_ALIASES[choice]}")
+
+#defining the /usage command
+async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_allowed(update):
+        return
+    chat_id = update.effective_chat.id
+
+    summary = await usage_store.get_usage_summary(chat_id)
+    if summary["replies"] == 0:
+        await update.message.reply_text("No usage recorded in the last 7 days.")
+        return
+
+    await update.message.reply_text(
+        "Last 7 days:\n"
+        f"Replies: {summary['replies']}\n"
+        f"Input tokens: {summary['input_tokens']:,}\n"
+        f"Output tokens: {summary['output_tokens']:,}\n"
+        f"Cache read: {summary['cache_read_input_tokens']:,}\n"
+        f"Cache write: {summary['cache_creation_input_tokens']:,}\n"
+        f"Web searches: {summary['web_searches']}"
+    )
 
 #defining the /memories command
 async def memories_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -87,6 +119,21 @@ async def forget_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await postgres_store.forget_memory(chat_id, memory_id)
     await update.message.reply_text(f"Forgot memory {position}.")
 
+#defining the /help command
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_allowed(update):
+        return
+    await update.message.reply_text(
+        "Commands:\n"
+        "/model <sonnet|opus|haiku> — view or switch the model for this chat\n"
+        "/memories — list facts saved about you\n"
+        "/forget <number> — delete a saved fact (see /memories for numbers)\n"
+        "/usage — token usage summary for the last 7 days\n"
+        "/help — show this list\n\n"
+        "In groups: mention me (@) or reply to one of my messages to get a reply. "
+        "I read the whole conversation for context, but only respond when addressed."
+    )
+
 #Telegram rejects an edit whose text is byte-identical to what's already
 #shown (BadRequest: "Message is not modified") instead of just no-op'ing.
 #That's harmless — it means the displayed text is already correct — so
@@ -98,13 +145,10 @@ async def safe_edit(message, text: str, **kwargs) -> None:
         if "Message is not modified" not in str(e):
             raise
 
-#defining the echo function
-async def handlemessage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_allowed(update):
-        return  # silently ignore anyone not in ALLOWED_USER_IDS
-    chat_id = update.effective_chat.id
-    session.append(chat_id, "user", update.message.text)
-
+#shared streaming logic: runs get_reply, streams the response into Telegram
+#message edits, and appends the assistant turn to session history. Used by
+#both the private-chat handler and the (triggered) group handler below.
+async def _stream_claude_reply(update: Update, chat_id: int, max_messages: int | None = None) -> None:
     placeholder = await update.message.reply_text("…")
 
     full_reply = ""
@@ -132,7 +176,73 @@ async def handlemessage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     for extra in chunks[1:]:
         await update.message.reply_text(markdown_to_telegram_html(extra), parse_mode="HTML")
 
-    session.append(chat_id, "assistant", full_reply)
+    session.append(chat_id, "assistant", full_reply, max_messages=max_messages)
+
+#defining the private-chat message handler
+async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_allowed(update):
+        return  # silently ignore anyone not in ALLOWED_USER_IDS
+    chat_id = update.effective_chat.id
+    reply_prefix = build_reply_prefix(update.message.reply_to_message, context.bot.id)
+    session.append(chat_id, "user", reply_prefix + update.message.text)
+    await _stream_claude_reply(update, chat_id)
+
+#defining the group-chat message handler: every message is stored for
+#context (with sender attribution), but Claude is only called when the bot
+#is @-mentioned or the message replies directly to one of the bot's own
+async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    if not await allowed_chats_store.is_chat_allowed(chat_id):
+        return  # not an authorized group — my_chat_member_handler should already have left it
+
+    message = update.message
+    reply_prefix = build_reply_prefix(message.reply_to_message, context.bot.id)
+    triggered = group_support.is_mentioned(message, context.bot.username) or group_support.is_reply_to_bot(
+        message, context.bot.id
+    )
+    # Strip the @mention token so Claude sees the actual question, not its
+    # own name — only relevant when this message is what triggers a reply.
+    text = group_support.strip_mention(message.text, context.bot.username) if triggered else message.text
+    sender = group_support.display_name(message.from_user)
+
+    # Store for every sender regardless of ALLOWED_USER_IDS — this is what
+    # lets the bot "understand who wrote what" even for people who can't
+    # trigger a reply themselves.
+    session.append(
+        chat_id,
+        "user",
+        f"{sender}: {reply_prefix}{text}",
+        max_messages=settings.group_max_session_messages,
+    )
+
+    if not triggered:
+        return  # visible context only — not addressed to the bot
+
+    await _stream_claude_reply(update, chat_id, max_messages=settings.group_max_session_messages)
+
+#runs when the bot's own membership status changes in a chat. Only a user in
+#ALLOWED_USER_IDS may add the bot to a group; anyone else's invite is
+#declined by leaving immediately, so a group is only ever "live" if an
+#owner-approved person put the bot there.
+async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    result = update.my_chat_member
+    if result.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
+        return
+
+    joined_statuses = (ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR)
+    was_member = result.old_chat_member.status in joined_statuses
+    is_member = result.new_chat_member.status in joined_statuses
+    if was_member or not is_member:
+        return  # not a "bot just got added" transition — ignore promotions, kicks, etc.
+
+    chat_id = result.chat.id
+    added_by = result.from_user.id
+    if added_by in settings.allowed_user_ids:
+        await allowed_chats_store.add_allowed_chat(chat_id, added_by)
+        logger.info("Joined authorized group chat_id=%s added_by=%s", chat_id, added_by)
+    else:
+        logger.warning("Leaving unauthorized group chat_id=%s added_by=%s", chat_id, added_by)
+        await context.bot.leave_chat(chat_id)
 
 #runs once, after the Application is built but before polling starts —
 #the right place to open the DB pool, since it needs a running event loop
@@ -163,8 +273,20 @@ def main() -> None:
     #adding the handlers for /memories and /forget
     application.add_handler(CommandHandler("memories", memories_command))
     application.add_handler(CommandHandler("forget", forget_command))
-    #adding the handler for the message
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlemessage))
+    #adding the handler for the /usage command
+    application.add_handler(CommandHandler("usage", usage_command))
+    #adding the handler for the /help command
+    application.add_handler(CommandHandler("help", help_command))
+    #adding the handler for private-chat messages
+    application.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_private_message)
+    )
+    #adding the handler for group-chat messages
+    application.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_group_message)
+    )
+    #adding the handler for the bot's own membership changes (added to / removed from a group)
+    application.add_handler(ChatMemberHandler(my_chat_member_handler, ChatMemberHandler.MY_CHAT_MEMBER))
     #catches exceptions from any of the handlers above
     application.add_error_handler(error_handler)
     #running the polling
