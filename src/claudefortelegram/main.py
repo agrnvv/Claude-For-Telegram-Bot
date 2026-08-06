@@ -70,6 +70,14 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("No usage recorded in the last 7 days.")
         return
 
+    # Total prompt size = input + cache_read + cache_creation (input_tokens
+    # alone is only the uncached remainder). Surfacing the hit rate makes a
+    # silent caching regression visible instead of just a rising bill.
+    prompt_tokens = (
+        summary["input_tokens"] + summary["cache_read_input_tokens"] + summary["cache_creation_input_tokens"]
+    )
+    cache_hit_rate = (summary["cache_read_input_tokens"] / prompt_tokens * 100) if prompt_tokens else 0.0
+
     await update.message.reply_text(
         "Last 7 days:\n"
         f"Replies: {summary['replies']}\n"
@@ -77,6 +85,7 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         f"Output tokens: {summary['output_tokens']:,}\n"
         f"Cache read: {summary['cache_read_input_tokens']:,}\n"
         f"Cache write: {summary['cache_creation_input_tokens']:,}\n"
+        f"Cache hit rate: {cache_hit_rate:.0f}%\n"
         f"Web searches: {summary['web_searches']}"
     )
 
