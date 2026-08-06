@@ -49,6 +49,13 @@ async def get_reply(chat_id: int, messages: list[dict]):
     # unchanged — with this marker, only the first pass pays full price for
     # it; every later pass in the same reply reads it from cache (~10% cost)
     # instead of paying full input price again.
+    #
+    # ttl="1h" instead of the 5-minute default: this is a personal assistant
+    # used sporadically through the day, not a chat with continuous traffic —
+    # gaps between messages regularly exceed 5 minutes, which would silently
+    # evict the 5m cache and pay full price on every message. The 1h write
+    # costs 2x instead of 1.25x, but breaks even at 3 reads instead of 2 —
+    # trivially met across a normal back-and-forth conversation.
     if conversation:
         last = conversation[-1]
         conversation[-1] = {
@@ -56,7 +63,7 @@ async def get_reply(chat_id: int, messages: list[dict]):
             "content": [{
                 "type": "text",
                 "text": last["content"],
-                "cache_control": {"type": "ephemeral"},
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
             }],
         }
 
@@ -104,7 +111,7 @@ async def get_reply(chat_id: int, messages: list[dict]):
             system=[{
                 "type": "text",
                 "text": system_prompt,
-                "cache_control": {"type": "ephemeral"},
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
             }],
             tools=[SAVE_MEMORY_TOOL, web_search_tool_for_model(model), *google_docs_tools()],
             messages=conversation,
