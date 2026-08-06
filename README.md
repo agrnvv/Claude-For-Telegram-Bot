@@ -30,9 +30,29 @@ every future conversation, even after a restart.
 | `/model sonnet` \| `/model opus` \| `/model haiku` | Switches this chat to Claude Sonnet 5 (default, best balance), Opus 4.8 (hardest reasoning), or Haiku 4.5 (fastest/cheapest). This choice is per-chat and resets on restart. |
 | `/memories` | Lists every fact currently saved for this chat, each with a numeric ID. |
 | `/forget <id>` | Deletes one saved fact by its ID (get the ID from `/memories` first). |
+| `/usage` | Token usage summary (input/output/cache tokens, web searches) for this chat over the last 7 days. |
+| `/help` | Lists all commands. |
 
-Only messages from Telegram user IDs listed in `ALLOWED_USER_IDS` get a response —
-everyone else is silently ignored.
+In a private chat, only messages from Telegram user IDs listed in `ALLOWED_USER_IDS`
+get a response — everyone else is silently ignored.
+
+**In a group chat**, the bot only replies when you @-mention it or reply directly to
+one of its own messages — otherwise it just reads along, so it has context when it
+*is* addressed. It attributes messages to whoever sent them ("Alice: ...") and keeps a
+shorter rolling window than in private chats, since groups generate a lot more volume.
+A group is only ever active if a user in `ALLOWED_USER_IDS` was the one who added the
+bot to it — if anyone else adds it, the bot leaves immediately. Within an authorized
+group, anyone can @-mention the bot and get a reply (not just allowlisted users).
+
+Note: group support requires **privacy mode disabled** for your bot — message
+[@BotFather](https://t.me/BotFather), `/setprivacy`, pick your bot, choose **Disable**.
+Without this, Telegram only forwards @mentions/replies/commands to the bot, not the
+rest of the conversation, and it won't have real context to work with.
+
+**Google Docs (optional):** if configured (see [Configuration](#configuration)), ask
+the bot to read or add to a Google Doc by pasting the link — e.g. "read this doc:
+`<link>` and summarize it" or "add this to `<link>`: ...". Off by default; nothing
+else changes if you don't set it up.
 
 ## Getting your own bot running
 
@@ -85,36 +105,49 @@ POSTGRES_PASSWORD=postgres postgres`) and its connection string in `DATABASE_URL
 
 Environment-driven via `.env` locally / Railway variables in production (see
 `.env.example`): bot token, API key, allowed user IDs, model, effort, `DATABASE_URL`,
-in-memory session cap (`MAX_SESSION_MESSAGES`), idle eviction timeout
-(`SESSION_IDLE_TIMEOUT_MINUTES`), optional custom system prompt file.
+in-memory session caps (`MAX_SESSION_MESSAGES` for private chats,
+`GROUP_MAX_SESSION_MESSAGES` for groups), idle eviction timeout
+(`SESSION_IDLE_TIMEOUT_MINUTES`), optional custom system prompt file, and the optional
+Google Docs trio (`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REFRESH_TOKEN`
+— run `scripts/google_oauth_setup.py` once to mint the refresh token; see that script's
+docstring for the one-time GCP setup).
 
 ## Project layout
 
 ```
 claudefortelegram/
 ├── railway.json                 # Railway build/start/restart config
-├── db/schema.sql                 # the ONE table: memories (chat_id, content, created_at)
+├── db/schema.sql                 # memories, usage_log, allowed_chats tables
 ├── .env.example                  # copy to .env and fill in secrets/config
 ├── .gitignore
 ├── requirements.txt
 ├── src/claudefortelegram/
-│   ├── main.py                   # entrypoint + all command/message handlers (/model, /memories, /forget, chat)
+│   ├── main.py                   # entrypoint + all command/message handlers, group routing
 │   ├── config.py                 # loads/validates environment variables
 │   ├── bot/
-│   │   └── middleware.py         # user allowlist check (is_allowed)
+│   │   ├── middleware.py         # user allowlist check (is_allowed)
+│   │   ├── reply_context.py      # builds the "[Replying to X: ...]" quoted-context prefix
+│   │   ├── group_support.py      # mention detection, mention stripping, sender display name
+│   │   └── allowed_chats_store.py  # which groups the bot is authorized to be active in
 │   ├── claude/
 │   │   ├── client.py             # Anthropic SDK wrapper — request building, streaming, tool-use loop
 │   │   ├── prompts.py            # system prompt template (injects remembered facts)
-│   │   └── tools.py              # the "remember" tool schema + dispatch to memory/store.py
+│   │   └── tools.py              # tool schemas + dispatch: save_memory, Google Docs read/append
 │   ├── memory/                   # LONG-TERM, persisted, explicit-only
 │   │   ├── store.py              # interface: get/save/list/forget memories
 │   │   └── postgres_store.py     # Postgres implementation (Railway Postgres plugin, asyncpg)
 │   ├── conversation/              # SHORT-TERM, ephemeral, never persisted
 │   │   └── session.py            # in-process capped history per chat_id, for context only
+│   ├── usage/
+│   │   └── store.py              # per-reply token usage log + /usage summary query
+│   ├── google_docs/
+│   │   └── client.py             # Docs API read/append over httpx, OAuth refresh-token auth
 │   └── utils/
 │       └── telegram_formatting.py  # Markdown->Telegram formatting, 4096-char message splitting
 ├── tests/
-└── scripts/run.sh                # local launcher (Railway itself uses railway.json's startCommand)
+└── scripts/
+    ├── run.sh                    # local launcher (Railway itself uses railway.json's startCommand)
+    └── google_oauth_setup.py     # one-time script to mint GOOGLE_REFRESH_TOKEN
 ```
 
 ## Architecture

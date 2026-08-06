@@ -18,7 +18,15 @@ async def init_pool() -> None:
     _pool = await asyncpg.create_pool(settings.database_url)
     async with _pool.acquire() as conn:
         await conn.execute(_SCHEMA_PATH.read_text())
-    
+
+
+def get_pool() -> asyncpg.Pool:
+    """The shared asyncpg pool, for sibling store modules (usage, allowed
+    chats, ...) that want to reuse this connection pool instead of opening
+    their own."""
+    return _pool
+
+
 # Cap on facts injected into the system prompt on every single request. Without
 # this, saving more memories over time makes every future message — even "hi" —
 # a little more expensive forever, with no ceiling.
