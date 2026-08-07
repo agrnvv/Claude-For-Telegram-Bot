@@ -70,6 +70,14 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("No usage recorded in the last 7 days.")
         return
 
+    # Total prompt size = input + cache_read + cache_creation (input_tokens
+    # alone is only the uncached remainder). Surfacing the hit rate makes a
+    # silent caching regression visible instead of just a rising bill.
+    prompt_tokens = (
+        summary["input_tokens"] + summary["cache_read_input_tokens"] + summary["cache_creation_input_tokens"]
+    )
+    cache_hit_rate = (summary["cache_read_input_tokens"] / prompt_tokens * 100) if prompt_tokens else 0.0
+
     await update.message.reply_text(
         "Last 7 days:\n"
         f"Replies: {summary['replies']}\n"
@@ -77,6 +85,7 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         f"Output tokens: {summary['output_tokens']:,}\n"
         f"Cache read: {summary['cache_read_input_tokens']:,}\n"
         f"Cache write: {summary['cache_creation_input_tokens']:,}\n"
+        f"Cache hit rate: {cache_hit_rate:.0f}%\n"
         f"Web searches: {summary['web_searches']}"
     )
 
@@ -289,8 +298,14 @@ def main() -> None:
     application.add_handler(ChatMemberHandler(my_chat_member_handler, ChatMemberHandler.MY_CHAT_MEMBER))
     #catches exceptions from any of the handlers above
     application.add_error_handler(error_handler)
-    #running the polling
-    application.run_polling()
+    #running the polling. allowed_updates is explicit and deliberately narrow:
+    #without it, Telegram's default set includes message_reaction (someone
+    #tapping 👍 on any message) and message_reaction_count, which this bot has
+    #no handler for and which — in a busy group — fire constantly. Restricting
+    #to exactly what's handled (message, my_chat_member) stops those updates
+    #from ever reaching the bot, instead of trying to catch/ignore them after
+    #the fact.
+    application.run_polling(allowed_updates=[Update.MESSAGE, Update.MY_CHAT_MEMBER])
 
 #running the main function
 if __name__ == "__main__":
