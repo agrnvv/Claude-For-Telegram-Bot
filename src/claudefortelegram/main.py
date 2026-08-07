@@ -298,8 +298,14 @@ def main() -> None:
     application.add_handler(ChatMemberHandler(my_chat_member_handler, ChatMemberHandler.MY_CHAT_MEMBER))
     #catches exceptions from any of the handlers above
     application.add_error_handler(error_handler)
-    #running the polling
-    application.run_polling()
+    #running the polling. allowed_updates is explicit and deliberately narrow:
+    #without it, Telegram's default set includes message_reaction (someone
+    #tapping 👍 on any message) and message_reaction_count, which this bot has
+    #no handler for and which — in a busy group — fire constantly. Restricting
+    #to exactly what's handled (message, my_chat_member) stops those updates
+    #from ever reaching the bot, instead of trying to catch/ignore them after
+    #the fact.
+    application.run_polling(allowed_updates=[Update.MESSAGE, Update.MY_CHAT_MEMBER])
 
 #running the main function
 if __name__ == "__main__":
