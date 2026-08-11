@@ -32,6 +32,13 @@ logger = logging.getLogger(__name__)
 
 EDIT_INTERVAL_SECONDS = 1.0
 
+PRIVATE_BOT_MESSAGE = (
+    "This is a private bot — it only replies to its owner's whitelisted users "
+    "and groups they've added it to.\n\n"
+    "You're welcome to run your own using the source code: "
+    "https://github.com/agrnvv/Claude-For-Telegram-Bot"
+)
+
 MODEL_ALIASES = {
     "sonnet": "claude-sonnet-5",
     "opus": "claude-opus-4-8",
@@ -128,9 +135,18 @@ async def forget_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await postgres_store.forget_memory(chat_id, memory_id)
     await update.message.reply_text(f"Forgot memory {position}.")
 
+#defining the /start command — usually the first message a stranger sends,
+#so it needs the same rejection as a plain text message would get
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_allowed(update):
+        await update.message.reply_text(PRIVATE_BOT_MESSAGE)
+        return
+    await update.message.reply_text("Hi! Send me a message, or see /help for commands.")
+
 #defining the /help command
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_allowed(update):
+        await update.message.reply_text(PRIVATE_BOT_MESSAGE)
         return
     await update.message.reply_text(
         "Commands:\n"
@@ -190,7 +206,8 @@ async def _stream_claude_reply(update: Update, chat_id: int, max_messages: int |
 #defining the private-chat message handler
 async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_allowed(update):
-        return  # silently ignore anyone not in ALLOWED_USER_IDS
+        await update.message.reply_text(PRIVATE_BOT_MESSAGE)
+        return
     chat_id = update.effective_chat.id
     reply_prefix = build_reply_prefix(update.message.reply_to_message, context.bot.id)
     session.append(chat_id, "user", reply_prefix + update.message.text)
@@ -277,6 +294,8 @@ def main() -> None:
         .post_init(post_init)
         .build()
     )
+    #adding the handler for the /start command
+    application.add_handler(CommandHandler("start", start_command))
     #adding the handler for the /model command
     application.add_handler(CommandHandler("model", model_command))
     #adding the handlers for /memories and /forget
