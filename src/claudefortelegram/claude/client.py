@@ -147,6 +147,16 @@ async def get_reply(chat_id: int, messages: list[dict]):
                     "content": result_text,
                 })
 
+            # Mark the end of this pass cacheable too — otherwise only the
+            # very first pass's prefix is ever cached, and every later pass
+            # re-sends this tool_use/tool_result exchange at full uncached
+            # price (up to MAX_TOOL_ITERATIONS times for the same content).
+            if tool_results:
+                tool_results[-1] = {
+                    **tool_results[-1],
+                    "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                }
+
             conversation.append({"role": "user", "content": tool_results})
             continue
 

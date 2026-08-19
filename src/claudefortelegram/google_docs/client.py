@@ -20,6 +20,12 @@ DOCS_API_BASE = "https://docs.googleapis.com/v1/documents"
 
 _DOC_ID_PATTERN = re.compile(r"/document/d/([a-zA-Z0-9_-]+)")
 
+# Cap on how much doc text gets injected into a single tool_result. Without
+# this, reading one large doc can dump tens of thousands of uncached tokens
+# into a single reply — unlike every other quoted/injected text in this bot
+# (see reply_context.py's QUOTE_MAX_CHARS), doc reads had no ceiling at all.
+MAX_DOC_CHARS = 20_000
+
 # Cached access token — refresh tokens don't expire from use, but the access
 # token they mint is short-lived (~1h), so avoid re-minting one on every call.
 _cached_access_token: str | None = None
@@ -88,7 +94,11 @@ async def read_doc(doc_id: str) -> str:
     async with httpx.AsyncClient() as http_client:
         document = await _fetch_document(doc_id, token, http_client)
     text = _extract_text(document)
-    return text if text.strip() else "(the document is empty)"
+    if not text.strip():
+        return "(the document is empty)"
+    if len(text) > MAX_DOC_CHARS:
+        text = text[:MAX_DOC_CHARS] + f"\n\n…[truncated — document is {len(text):,} characters total]"
+    return text
 
 
 async def append_to_doc(doc_id: str, text: str) -> None:
