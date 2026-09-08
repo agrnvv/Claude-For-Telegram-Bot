@@ -3,6 +3,7 @@
 # dispatch function the bot runs when that tool_use block comes back — writes
 # to memory/store.py and returns a tool_result confirming what was saved.
 
+from claudefortelegram.config import settings
 from claudefortelegram.memory import postgres_store
 from claudefortelegram.google_docs import client as google_docs_client
 
@@ -26,9 +27,22 @@ SAVE_MEMORY_TOOL = {
 }
 
 
-async def handle_save_memory(chat_id: int, tool_input: dict) -> str:
-    """Runs when Claude emits a save_memory tool_use block. Returns the tool_result text."""
+async def handle_save_memory(chat_id: int, tool_input: dict, sender_user_id: int | None) -> str:
+    """Runs when Claude emits a save_memory tool_use block. Returns the tool_result text.
+
+    This check happens in code, not by trusting Claude's judgment of the
+    conversation text — in a group chat, anyone can type "I confirm, save
+    this" (or rename themselves to look like the owner) and try to talk
+    Claude into calling this tool. sender_user_id is the real Telegram user
+    id of whoever sent the message that triggered this turn, so a save only
+    ever goes through when that's actually the bot owner.
+    """
     content = tool_input["content"]
+    if sender_user_id not in settings.allowed_user_ids:
+        return (
+            "Not saved — remembering facts can only be confirmed by the bot's "
+            "owner, not by other people in this chat."
+        )
     await postgres_store.save_memory(chat_id, content)
     return f"Saved: {content}"
 
@@ -112,9 +126,10 @@ APPEND_GOOGLE_DOC_TOOL = {
 }
 
 
-async def handle_read_google_doc(_chat_id: int, tool_input: dict) -> str:
-    """Runs when Claude emits a read_google_doc tool_use block. `chat_id` is
-    unused — kept for a uniform dispatch signature with the other tools."""
+async def handle_read_google_doc(_chat_id: int, tool_input: dict, _sender_user_id: int | None) -> str:
+    """Runs when Claude emits a read_google_doc tool_use block. `chat_id` and
+    `sender_user_id` are unused — kept for a uniform dispatch signature with
+    the other tools."""
     doc_id = google_docs_client.extract_doc_id(tool_input["url"])
     if doc_id is None:
         return "That doesn't look like a valid Google Docs URL."
@@ -124,7 +139,7 @@ async def handle_read_google_doc(_chat_id: int, tool_input: dict) -> str:
         return f"Couldn't read the document: {e}"
 
 
-async def handle_append_google_doc(_chat_id: int, tool_input: dict) -> str:
+async def handle_append_google_doc(_chat_id: int, tool_input: dict, _sender_user_id: int | None) -> str:
     """Runs when Claude emits an append_to_google_doc tool_use block."""
     doc_id = google_docs_client.extract_doc_id(tool_input["url"])
     if doc_id is None:

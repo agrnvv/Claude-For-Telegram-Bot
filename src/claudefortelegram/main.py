@@ -176,10 +176,16 @@ async def safe_edit(message, text: str, **kwargs) -> None:
 async def _stream_claude_reply(update: Update, chat_id: int, max_messages: int | None = None) -> None:
     placeholder = await update.message.reply_text("…")
 
+    # The Telegram id of whoever actually sent the triggering message — not
+    # derived from anything Claude reads, so it can't be spoofed by message
+    # text or a display name. Gates tools like save_memory (see
+    # claude/tools.py:handle_save_memory) against non-owner group members.
+    sender_user_id = update.effective_user.id if update.effective_user else None
+
     full_reply = ""
     last_edit = time.monotonic()
 
-    async for item in get_reply(chat_id, session.get_history(chat_id)):
+    async for item in get_reply(chat_id, session.get_history(chat_id), sender_user_id):
         if item["type"] == "status":
             # Rare, meaningful state change (e.g. "searching the web") — show it
             # right away, don't wait for the throttle interval like text deltas.
