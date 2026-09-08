@@ -21,9 +21,10 @@ logger = logging.getLogger(__name__)
 
 client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
-# Client-side tool dispatch table: tool name -> async handler(chat_id, tool_input) -> result text.
-# Every handler shares this signature even when it doesn't need chat_id (see
-# claude/tools.py), so adding a tool here never grows this into an if/elif chain.
+# Client-side tool dispatch table: tool name -> async handler(chat_id, tool_input,
+# sender_user_id) -> result text. Every handler shares this signature even when
+# it doesn't need chat_id or sender_user_id (see claude/tools.py), so adding a
+# tool here never grows this into an if/elif chain.
 TOOL_HANDLERS = {
     "save_memory": handle_save_memory,
     "read_google_doc": handle_read_google_doc,
@@ -37,7 +38,7 @@ TOOL_HANDLERS = {
 MAX_TOOL_ITERATIONS = 5
 
 
-async def get_reply(chat_id: int, messages: list[dict]):
+async def get_reply(chat_id: int, messages: list[dict], sender_user_id: int | None = None):
     memories = await postgres_store.get_memories(chat_id)
     system_prompt = build_system_prompt(memories, google_docs_enabled=google_docs_client.is_configured())
     model = session.get_model(chat_id)
@@ -140,7 +141,7 @@ async def get_reply(chat_id: int, messages: list[dict]):
                 handler = TOOL_HANDLERS.get(block.name)
                 if handler is None:
                     continue
-                result_text = await handler(chat_id, block.input)
+                result_text = await handler(chat_id, block.input, sender_user_id)
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": block.id,
